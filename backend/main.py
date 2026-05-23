@@ -241,7 +241,7 @@ async def accept_terms(user: dict = Depends(require_auth)):
 
 
 @app.post("/api/auth/logout")
-async def logout(authorization: str = Header(...), user: dict = Depends(require_auth)):
+async def logout(user: dict = Depends(require_auth), authorization: str | None = Header(None)):
     jti = user.get("_token_jti", "")
     if jti:
         blacklist_token(jti)
@@ -511,6 +511,12 @@ async def analyze_mastodon(req: PlatformRequest, user: dict = Depends(require_au
             handle = parts[0]
             instance = parts[1]
     
+    # Clean instance string (strip protocol and trailing slashes)
+    instance = instance.lower().replace("https://", "").replace("http://", "").split("/")[0].strip()
+    
+    if not instance:
+        instance = "mastodon.social"
+
     _validate_external_host(instance)
     logger.info("Mastodon analysis: user=%s handle=%s instance=%s", user["id"], handle, instance)
 
