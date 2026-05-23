@@ -1,7 +1,26 @@
 import { usePlatformStore } from '../store'
-import Plot from 'react-plotly.js'
+import Plotly from 'plotly.js-dist-min'
+import createPlotlyComponent from 'react-plotly.js/factory'
 import { getRiskLabel, formatPercent } from '../types'
 import SocioEconomicPanel from '../components/analysis/SocioEconomicPanel'
+
+// High-resilience factory resolver
+function getPlotlyComponent() {
+  try {
+    const _createPlotlyComponent = createPlotlyComponent as any
+    if (typeof _createPlotlyComponent === 'function') {
+      return _createPlotlyComponent(Plotly)
+    }
+    if (_createPlotlyComponent?.default && typeof _createPlotlyComponent.default === 'function') {
+      return _createPlotlyComponent.default(Plotly)
+    }
+    return null
+  } catch (e) {
+    return null
+  }
+}
+
+const Plot = getPlotlyComponent()
 
 export default function MultiPlatformPage() {
   const { reddit, bluesky, mastodon, youtube, file, facebook, twitter, video } = usePlatformStore()
@@ -106,51 +125,55 @@ export default function MultiPlatformPage() {
         <div className="text-[0.78rem] font-bold text-[#1f2937] mb-[10px] pb-[8px] border-b border-[#f1f5f9]">
           Platform Breakdown
         </div>
-        <Plot
-          data={[
-            {
-              type: 'bar',
-              x: platformKeys,
-              y: platformKeys.map((k) => platforms[k].overall),
-              marker: { color: barColors },
-              text: platformKeys.map((k) => formatPercent(platforms[k].overall)),
-              textposition: 'outside',
-              textfont: { color: '#4b5563', size: 10 },
-            },
-          ]}
-          layout={{
-            paper_bgcolor: 'rgba(0,0,0,0)',
-            plot_bgcolor: '#ffffff',
-            font: { color: '#4b5563', size: 10 },
-            yaxis: { tickformat: '.0%', range: [0, 1.1], gridcolor: '#e5e7eb', color: '#4b5563' },
-            xaxis: { color: '#4b5563' },
-            margin: { l: 30, r: 20, t: 10, b: 30 },
-            height: 220,
-            showlegend: false,
-            shapes: [
+        {!Plot ? (
+          <div className="p-4 text-sm text-gray-500">Chart engine failed to load.</div>
+        ) : (
+          <Plot
+            data={[
               {
-                type: 'line',
-                xref: 'paper', yref: 'y',
-                x0: 0, x1: 1,
-                y0: unifiedScore, y1: unifiedScore,
-                line: { dash: 'dot', color: '#0F6E56', width: 1.5 },
+                type: 'bar',
+                x: platformKeys,
+                y: platformKeys.map((k) => platforms[k].overall),
+                marker: { color: barColors },
+                text: platformKeys.map((k) => formatPercent(platforms[k].overall)),
+                textposition: 'outside',
+                textfont: { color: '#4b5563', size: 10 },
               },
-            ],
-            annotations: [
-              {
-                x: 1, y: unifiedScore,
-                xref: 'paper', yref: 'y',
-                text: `Unified avg: ${formatPercent(unifiedScore)}`,
-                showarrow: false,
-                font: { size: 9, color: '#0F6E56' },
-                xanchor: 'right',
-                yanchor: 'bottom',
-              },
-            ],
-          }}
-          config={{ displayModeBar: false }}
-          className="w-full"
-        />
+            ]}
+            layout={{
+              paper_bgcolor: 'rgba(0,0,0,0)',
+              plot_bgcolor: '#ffffff',
+              font: { color: '#4b5563', size: 10 },
+              yaxis: { tickformat: '.0%', range: [0, 1.1], gridcolor: '#e5e7eb', color: '#4b5563' },
+              xaxis: { color: '#4b5563' },
+              margin: { l: 30, r: 20, t: 10, b: 30 },
+              height: 220,
+              showlegend: false,
+              shapes: [
+                {
+                  type: 'line',
+                  xref: 'paper', yref: 'y',
+                  x0: 0, x1: 1,
+                  y0: unifiedScore, y1: unifiedScore,
+                  line: { dash: 'dot', color: '#0F6E56', width: 1.5 },
+                },
+              ],
+              annotations: [
+                {
+                  x: 1, y: unifiedScore,
+                  xref: 'paper', yref: 'y',
+                  text: `Unified avg: ${formatPercent(unifiedScore)}`,
+                  showarrow: false,
+                  font: { size: 9, color: '#0F6E56' },
+                  xanchor: 'right',
+                  yanchor: 'bottom',
+                },
+              ],
+            }}
+            config={{ displayModeBar: false }}
+            className="w-full"
+          />
+        )}
       </div>
 
       {/* Detail table */}
