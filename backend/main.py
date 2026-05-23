@@ -377,33 +377,41 @@ async def analyze_reddit(req: PlatformRequest, user: dict = Depends(require_auth
     if not req.username.strip():
         raise HTTPException(400, "Reddit username is required.")
 
-    try:
+    def _fetch_reddit_posts(username: str):
         import praw
-        import prawcore
         reddit = praw.Reddit(
             client_id=client_id,
             client_secret=client_secret,
             user_agent="MindGuard/1.0",
         )
-        redditor = reddit.redditor(req.username)
-
-        raw_posts = []
-        for submission in redditor.submissions.new(limit=200):
-            raw_posts.append({
-                "text": submission.title + " " + (submission.selftext or ""),
+        redditor = reddit.redditor(username)
+        
+        posts = []
+        # Get submissions
+        for submission in redditor.submissions.new(limit=100):
+            posts.append({
+                "text": (submission.title or "") + " " + (submission.selftext or ""),
                 "date": datetime.fromtimestamp(submission.created_utc, tz=timezone.utc).isoformat(),
                 "url": f"https://reddit.com{submission.permalink}",
                 "subreddit": submission.subreddit.display_name,
                 "type": "submission",
             })
-        for comment in redditor.comments.new(limit=500):
-            raw_posts.append({
-                "text": comment.body,
+        # Get comments
+        for comment in redditor.comments.new(limit=100):
+            posts.append({
+                "text": comment.body or "",
                 "date": datetime.fromtimestamp(comment.created_utc, tz=timezone.utc).isoformat(),
                 "url": f"https://reddit.com{comment.permalink}",
                 "subreddit": comment.subreddit.display_name,
                 "type": "comment",
             })
+        return posts
+
+    try:
+        raw_posts = await asyncio.to_thread(_fetch_reddit_posts, req.username)
+        
+        if not raw_posts:
+            return _build_platform_result([], "reddit")
 
         text_col = [clean_text(p["text"]) for p in raw_posts]
         scores = await predict_batch(text_col)
@@ -419,37 +427,29 @@ async def analyze_reddit(req: PlatformRequest, user: dict = Depends(require_auth
 
     except ImportError:
         raise HTTPException(501, "PRAW not installed. Install with: pip install praw")
-    except prawcore.exceptions.NotFound:
-        raise HTTPException(404, f"Reddit user '{req.username}' not found.")
-    except prawcore.exceptions.Forbidden:
-        raise HTTPException(403, f"Access forbidden for Reddit user '{req.username}'.")
-    except prawcore.exceptions.ResponseException as e:
-        logger.error("Reddit API error: %s", e)
-        raise HTTPException(502, f"Reddit API responded with an error: {e}")
-    except HTTPException:
-        raise
     except Exception as e:
         logger.error("Reddit analysis error: %s", e)
-        raise HTTPException(400, f"Reddit analysis failed: {e}")
+        raise HTTPException(400, f"Reddit analysis failed: {str(e)}")
 
 
 @app.post("/api/platforms/bluesky")
 async def analyze_bluesky(req: PlatformRequest, user: dict = Depends(require_auth)):
     if not req.handle or not req.password:
         raise HTTPException(400, "Handle and password required")
-    try:
+    
+    def _fetch_bluesky_posts(handle, password):
         from atproto import Client
         client = Client()
-        client.login(req.handle, req.password)
+        client.login(handle, password)
         did = client.me.did
 
-        raw_posts = []
+        posts = []
         cursor = None
-        for _ in range(5):
+        for _ in range(3):
             feed = client.app.bsky.feed.get_author_feed({
                 "actor": did,
                 "cursor": cursor,
-                "limit": 100,
+                "limit": 50,
             })
             for item in feed.feed:
                 post = item.post
@@ -459,14 +459,21 @@ async def analyze_bluesky(req: PlatformRequest, user: dict = Depends(require_aut
                     created = datetime.now(timezone.utc)
                 if (datetime.now(timezone.utc) - created).days > 90:
                     continue
-                raw_posts.append({
-                    "text": post.record.text,
+                posts.append({
+                    "text": post.record.text or "",
                     "date": post.created_at,
-                    "url": f"https://bsky.app/profile/{req.handle}/post/{post.uri.split('/')[-1]}",
+                    "url": f"https://bsky.app/profile/{handle}/post/{post.uri.split('/')[-1]}",
                 })
             if not feed.cursor:
                 break
             cursor = feed.cursor
+        return posts
+
+    try:
+        raw_posts = await asyncio.to_thread(_fetch_bluesky_posts, req.handle, req.password)
+        
+        if not raw_posts:
+            return _build_platform_result([], "bluesky")
 
         texts = [clean_text(p["text"]) for p in raw_posts]
         scores = await predict_batch(texts)
@@ -482,26 +489,48 @@ async def analyze_bluesky(req: PlatformRequest, user: dict = Depends(require_aut
 
     except ImportError:
         raise HTTPException(501, "atproto not installed")
-    except HTTPException:
-        raise
     except Exception as e:
         logger.error("Bluesky analysis error: %s", e)
-        raise HTTPException(400, "Bluesky analysis failed")
+        raise HTTPException(400, f"Bluesky analysis failed: {str(e)}")
 
 
 @app.post("/api/platforms/mastodon")
 async def analyze_mastodon(req: PlatformRequest, user: dict = Depends(require_auth)):
     if not req.handle:
         raise HTTPException(400, "Handle required")
-    _validate_external_host(req.instance)
+    
+    handle = req.handle.strip()
+    instance = req.instance.strip() if req.instance else "mastodon.social"
+
+    # Handle user@instance format
+    if "@" in handle:
+        parts = [p for p in handle.split("@") if p]
+        if len(parts) >= 2:
+            # handle might be @user@instance or user@instance
+            handle = parts[0]
+            instance = parts[1]
+    
+    _validate_external_host(instance)
+    logger.info("Mastodon analysis: user=%s handle=%s instance=%s", user["id"], handle, instance)
+
     try:
-        async with httpx.AsyncClient(timeout=10.0) as client:
-            r = await client.get(
-                f"https://{req.instance}/api/v1/accounts/lookup",
-                params={"acct": req.handle},
-            )
-            r.raise_for_status()
+        async with httpx.AsyncClient(timeout=15.0) as client:
+            try:
+                r = await client.get(
+                    f"https://{instance}/api/v1/accounts/lookup",
+                    params={"acct": handle},
+                )
+                r.raise_for_status()
+            except httpx.HTTPStatusError as e:
+                logger.error("Mastodon lookup failed for %s on %s: %s", handle, instance, e)
+                if e.response.status_code == 404:
+                    raise HTTPException(404, f"Mastodon user '{handle}' not found on {instance}")
+                raise HTTPException(502, f"Mastodon instance {instance} responded with error {e.response.status_code}")
+            
             acct = r.json()
+            acct_id = acct.get("id")
+            if not acct_id:
+                raise HTTPException(404, "Could not resolve Mastodon account ID")
 
             raw_posts = []
             max_id = None
@@ -509,28 +538,52 @@ async def analyze_mastodon(req: PlatformRequest, user: dict = Depends(require_au
                 params: dict = {"limit": 40, "exclude_replies": False}
                 if max_id:
                     params["max_id"] = max_id
-                r = await client.get(
-                    f"https://{req.instance}/api/v1/accounts/{acct['id']}/statuses",
-                    params=params,
-                )
-                r.raise_for_status()
+                
+                try:
+                    r = await client.get(
+                        f"https://{instance}/api/v1/accounts/{acct_id}/statuses",
+                        params=params,
+                    )
+                    r.raise_for_status()
+                except httpx.HTTPStatusError as e:
+                    logger.warning("Failed to fetch statuses for %s: %s", handle, e)
+                    break
+                
                 statuses = r.json()
                 if not statuses:
                     break
 
                 for s in statuses:
                     try:
-                        created = datetime.fromisoformat(s["created_at"].replace("Z", "+00:00"))
+                        # Parse date and filter (last 90 days)
+                        created_str = s.get("created_at", "")
+                        if not created_str:
+                            continue
+                        created = datetime.fromisoformat(created_str.replace("Z", "+00:00"))
                     except (ValueError, KeyError):
                         created = datetime.now(timezone.utc)
+                    
                     if (datetime.now(timezone.utc) - created).days > 90:
                         continue
-                    raw_posts.append({
-                        "text": re.sub(r"<[^>]+>", "", s.get("content", "")),
-                        "date": s.get("created_at", ""),
-                        "url": s.get("url", ""),
-                    })
-                max_id = statuses[-1]["id"]
+                        
+                    content = s.get("content", "")
+                    # Strip HTML
+                    clean_content = re.sub(r"<[^>]+>", "", content)
+                    if clean_content.strip():
+                        raw_posts.append({
+                            "text": clean_content,
+                            "date": created.isoformat(),
+                            "url": s.get("url", ""),
+                        })
+                
+                if statuses:
+                    max_id = statuses[-1].get("id")
+                if not max_id:
+                    break
+
+        if not raw_posts:
+            logger.info("No recent Mastodon posts found for %s", handle)
+            return _build_platform_result([], "mastodon")
 
         texts = [clean_text(p["text"]) for p in raw_posts]
         scores = await predict_batch(texts)
@@ -540,15 +593,16 @@ async def analyze_mastodon(req: PlatformRequest, user: dict = Depends(require_au
         result = _build_platform_result(raw_posts, "mastodon")
         result["min_risk"] = req.min_risk
         result["n_show"] = req.n_show
-        result["handle"] = req.handle
+        result["handle"] = handle
+        result["instance"] = instance
         _platform_results[user["id"]]["mastodon"] = result
         return result
 
     except HTTPException:
         raise
     except Exception as e:
-        logger.error("Mastodon analysis error: %s", e)
-        raise HTTPException(400, "Mastodon analysis failed")
+        logger.exception("Mastodon analysis error for %s: %s", handle, e)
+        raise HTTPException(400, f"Mastodon analysis failed: {str(e)}")
 
 
 @app.post("/api/platforms/youtube")
