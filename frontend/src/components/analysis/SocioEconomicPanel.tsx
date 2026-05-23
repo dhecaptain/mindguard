@@ -1,6 +1,6 @@
 import type { SocioeconomicSignal } from '../../types'
 import Plotly from 'plotly.js-dist-min'
-import createPlotlyComponent from 'react-plotly.js/factory'
+import createPlotlyComponent from 'react-plotly.js/factory.js'
 
 const Plot = createPlotlyComponent(Plotly)
 
