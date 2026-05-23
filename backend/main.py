@@ -1,4 +1,5 @@
 import asyncio
+import httpx
 import io
 import json
 import logging
@@ -689,44 +690,69 @@ async def analyze_youtube(req: PlatformRequest, user: dict = Depends(require_aut
 async def analyze_video(req: PlatformRequest, user: dict = Depends(require_auth)):
     if not req.video_url:
         raise HTTPException(400, "Video URL required")
+    logger.info("Video analysis started for URL: %s", req.video_url)
     try:
         import yt_dlp
         from faster_whisper import WhisperModel
 
         def _download_and_transcribe(video_url: str) -> tuple[str, str]:
             with tempfile.TemporaryDirectory() as tmpdir:
+                logger.info("Downloading audio with yt-dlp...")
                 ydl_opts = {
                     "format": "bestaudio/best",
                     "outtmpl": os.path.join(tmpdir, "audio.%(ext)s"),
                     "postprocessors": [{"key": "FFmpegExtractAudio", "preferredcodec": "mp3"}],
                     "quiet": True,
+                    "no_warnings": True,
                 }
                 with yt_dlp.YoutubeDL(ydl_opts) as ydl:
-                    ydl.download([video_url])
+                    try:
+                        ydl.download([video_url])
+                    except Exception as e:
+                        logger.error("yt-dlp download failed: %s", e)
+                        raise RuntimeError(f"Video download failed: {str(e)}")
 
                 audio_file = next(
                     (os.path.join(tmpdir, f) for f in os.listdir(tmpdir) if f.endswith(".mp3")),
                     None,
                 )
                 if not audio_file:
-                    raise RuntimeError("Could not download audio")
+                    raise RuntimeError("Could not locate downloaded audio file")
 
+                logger.info("Trimming audio to 5 minutes...")
                 trimmed = os.path.join(tmpdir, "trimmed.mp3")
                 proc = subprocess.run(
                     ["ffmpeg", "-i", audio_file, "-t", "300", "-y", trimmed],
                     capture_output=True, timeout=120,
                 )
-                if proc.returncode != 0 and not os.path.exists(trimmed):
-                    raise RuntimeError("Audio trimming failed")
+                if proc.returncode != 0:
+                    logger.error("ffmpeg trimming failed: %s", proc.stderr.decode())
+                    target = audio_file
+                else:
+                    target = trimmed
 
-                target = trimmed if os.path.exists(trimmed) else audio_file
-                whisper = WhisperModel("tiny", device="cpu", compute_type="int8")
-                segments, _ = whisper.transcribe(target)
-                return " ".join(seg.text for seg in segments), target
+                logger.info("Starting transcription with faster-whisper (tiny model)...")
+                try:
+                    # Use 'tiny' model and CPU for memory efficiency on Render Free
+                    whisper = WhisperModel("tiny", device="cpu", compute_type="int8")
+                    segments, info = whisper.transcribe(target, beam_size=1)
+                    transcript = " ".join(seg.text for seg in segments)
+                    logger.info("Transcription complete. Language: %s", info.language)
+                    return transcript, target
+                except Exception as e:
+                    logger.error("Whisper transcription failed: %s", e)
+                    raise RuntimeError(f"Transcription failed: {str(e)}")
 
+        # Increased timeout for the overall thread execution
         transcript, _ = await asyncio.to_thread(_download_and_transcribe, req.video_url)
+        
+        if not transcript.strip():
+            raise HTTPException(400, "No speech could be transcribed from the video")
+
+        logger.info("Running sentiment/risk analysis on transcript...")
         prob, ms = await predict_one(clean_text(transcript))
         label, color, level = risk_label(prob)
+        
         result = {
             "ok": True,
             "risk": prob,
@@ -739,14 +765,17 @@ async def analyze_video(req: PlatformRequest, user: dict = Depends(require_auth)
     except HTTPException:
         raise
     except ImportError:
-        raise HTTPException(501, "Video processing dependencies not installed")
+        logger.error("Video processing dependencies missing")
+        raise HTTPException(501, "Video processing dependencies (yt-dlp, faster-whisper) not installed")
     except subprocess.TimeoutExpired:
-        raise HTTPException(408, "Video processing timed out")
+        logger.error("Video processing (ffmpeg) timed out")
+        raise HTTPException(408, "Video processing timed out during trimming")
     except RuntimeError as e:
+        logger.error("Runtime error during video analysis: %s", e)
         raise HTTPException(400, str(e))
     except Exception as e:
-        logger.error("Video analysis error: %s", e)
-        raise HTTPException(400, "Video analysis failed")
+        logger.exception("Unexpected error during video analysis: %s", e)
+        raise HTTPException(400, f"Video analysis failed: {str(e)}")
 
 
 @app.post("/api/platforms/facebook")
