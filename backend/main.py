@@ -348,16 +348,38 @@ async def analyze_image(file: UploadFile = File(...), user: dict = Depends(requi
 # ── Platform routes ──────────────────────────────────────────────────
 
 def _build_platform_result(posts: list, platform_key: str) -> dict:
-    scores = np.array([p["risk_score"] for p in posts])
+    if not posts:
+        return {
+            "df": [],
+            "overall": 0.0,
+            "n_posts": 0,
+            "n_high": 0,
+            "signals": {},
+            "platform_key": platform_key,
+        }
+    
+    scores = np.array([p.get("risk_score", 0.0) for p in posts])
     df = [
-        {k: p.get(k) for k in ["text", "date", "url", "risk_score", "subreddit", "type"]}
+        {
+            "text": p.get("text", ""),
+            "date": p.get("date", ""),
+            "url": p.get("url", ""),
+            "risk_score": float(p.get("risk_score", 0.0)),
+            "subreddit": p.get("subreddit"),
+            "type": p.get("type"),
+        }
         for p in posts
     ]
+    
+    # Use native Python types (float, int) to ensure JSON serializability
+    overall = float(np.percentile(scores, 85)) if len(scores) > 0 else 0.0
+    n_high = int((scores >= 0.55).sum()) if len(scores) > 0 else 0
+    
     return {
         "df": df,
-        "overall": float(np.percentile(scores, 85)) if len(scores) > 0 else 0.0,
+        "overall": overall,
         "n_posts": len(posts),
-        "n_high": int((scores >= 0.55).sum()) if len(scores) > 0 else 0,
+        "n_high": n_high,
         "signals": detect_socioeconomic(posts),
         "platform_key": platform_key,
     }

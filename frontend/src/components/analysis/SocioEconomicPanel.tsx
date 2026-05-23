@@ -1,5 +1,8 @@
 import type { SocioeconomicSignal } from '../../types'
-import Plot from 'react-plotly.js'
+import Plotly from 'plotly.js-dist-min'
+import createPlotlyComponent from 'react-plotly.js/factory'
+
+const Plot = createPlotlyComponent(Plotly)
 
 interface SocioEconomicPanelProps {
   signals: Record<string, SocioeconomicSignal[]>
