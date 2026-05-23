@@ -1,8 +1,15 @@
 import type { SocioeconomicSignal } from '../../types'
 import Plotly from 'plotly.js-dist-min'
-import createPlotlyComponent from 'react-plotly.js/factory.js'
+import _createPlotlyComponent from 'react-plotly.js/factory'
 
-const Plot = createPlotlyComponent(Plotly)
+// Vite/ESM compatibility fix
+const createPlotlyComponent = (
+  typeof _createPlotlyComponent === 'function' 
+    ? _createPlotlyComponent 
+    : ( _createPlotlyComponent as any).default
+)
+
+const Plot = createPlotlyComponent ? createPlotlyComponent(Plotly) : null
 
 interface SocioEconomicPanelProps {
   signals: Record<string, SocioeconomicSignal[]>

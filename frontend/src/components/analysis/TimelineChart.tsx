@@ -1,8 +1,15 @@
 import Plotly from 'plotly.js-dist-min'
-import createPlotlyComponent from 'react-plotly.js/factory.js'
+import _createPlotlyComponent from 'react-plotly.js/factory'
 import type { PostData } from '../../types'
 
-const Plot = createPlotlyComponent(Plotly)
+// Vite/ESM compatibility fix: handle both default and named exports
+const createPlotlyComponent = (
+  typeof _createPlotlyComponent === 'function' 
+    ? _createPlotlyComponent 
+    : ( _createPlotlyComponent as any).default
+)
+
+const Plot = createPlotlyComponent ? createPlotlyComponent(Plotly) : null
 
 interface TimelineChartProps {
   posts: PostData[]
