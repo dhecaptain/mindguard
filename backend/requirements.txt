@@ -14,3 +14,6 @@ faster-whisper>=0.10.0
 yt-dlp>=2024.1.0
 supabase>=2.0.0
 atproto>=0.0.46
+torch>=2.2.0
+transformers>=4.38.0
+huggingface-hub>=0.21.0

@@ -23,3 +23,5 @@ YOUTUBE_API_KEY = os.getenv("YOUTUBE_API_KEY", "")
 
 SMTP_USER = os.getenv("SMTP_USER", "")
 SMTP_PASSWORD = os.getenv("SMTP_PASSWORD", "")
+
+USE_LOCAL_MODEL = os.getenv("USE_LOCAL_MODEL", "false").lower() == "true"

@@ -20,7 +20,8 @@ from fastapi import FastAPI, Header, Request, UploadFile, File, HTTPException, D
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 
-from backend.config import SUPABASE_URL, SUPABASE_ANON_KEY
+from backend.config import SUPABASE_URL, SUPABASE_ANON_KEY, USE_LOCAL_MODEL
+from backend.models.loader import load_model
 from backend.models.schemas import (
     TextAnalysisRequest, TextAnalysisResponse,
     PlatformRequest, LoginRequest, RegisterRequest, UserResponse,
@@ -84,7 +85,17 @@ async def startup():
     init_db()
     seed_defaults()
     logger.info("Database initialized and seeded")
-    asyncio.create_task(keep_space_warm())
+    
+    if USE_LOCAL_MODEL:
+        try:
+            logger.info("Loading local model...")
+            load_model()
+            logger.info("Local model loaded successfully")
+        except Exception as e:
+            logger.error("Failed to load local model: %s", e)
+    else:
+        logger.info("Using HF Space for predictions (local model disabled)")
+        asyncio.create_task(keep_space_warm())
 
 
 @app.get("/api/health")

@@ -9,6 +9,10 @@ import time
 import httpx
 import numpy as np
 import logging
+import torch
+
+from backend.config import USE_LOCAL_MODEL
+from backend.models.loader import load_model
 
 logger = logging.getLogger(__name__)
 
@@ -18,6 +22,30 @@ _SPACE_URL = f"{_SPACE_BASE}/predict"
 _TIMEOUT = 60.0
 _MAX_RETRIES = 8
 _RETRY_WAIT = 30  # seconds between 503 retries
+
+
+async def _run_local(texts: list[str]) -> list[float]:
+    """Run inference using the locally loaded model."""
+    try:
+        model, tokenizer, config, device = load_model()
+        if model is None or tokenizer is None:
+            raise RuntimeError("Model or tokenizer not loaded")
+
+        inputs = tokenizer(
+            texts, return_tensors="pt", truncation=True, 
+            padding=True, max_length=config.get("max_length", 256)
+        )
+        inputs = {k: v.to(device) for k, v in inputs.items()}
+
+        with torch.no_grad():
+            outputs = model(**inputs)
+        
+        probs = torch.softmax(outputs.logits, dim=1)
+        # Probability of "Suicidal" (class 1)
+        return probs[:, 1].tolist()
+    except Exception as e:
+        logger.error("Local inference failed: %s", e)
+        raise
 
 
 async def _call_space(inputs: list[str]) -> list[float]:
@@ -49,6 +77,15 @@ async def _call_space(inputs: list[str]) -> list[float]:
 
 async def predict_one(text: str) -> tuple[float, float]:
     t0 = time.time()
+    
+    if USE_LOCAL_MODEL:
+        try:
+            probs = await _run_local([text])
+            ms = (time.time() - t0) * 1000
+            return probs[0], ms
+        except Exception as e:
+            logger.warning("Falling back to HF Space for predict_one due to local error: %s", e)
+
     probs = await _call_space([text])
     ms = (time.time() - t0) * 1000
     return probs[0], ms
@@ -57,7 +94,19 @@ async def predict_one(text: str) -> tuple[float, float]:
 async def predict_batch(texts: list) -> np.ndarray:
     if not texts:
         return np.array([])
+    
     results: list[float] = []
+    
+    if USE_LOCAL_MODEL:
+        try:
+            # Simple batching for local inference
+            for i in range(0, len(texts), 32):
+                results.extend(await _run_local(texts[i : i + 32]))
+            return np.array(results)
+        except Exception as e:
+            logger.warning("Falling back to HF Space for predict_batch due to local error: %s", e)
+            results = [] # Reset results to avoid partial batch issues if we fallback
+
     for i in range(0, len(texts), 32):
         results.extend(await _call_space(texts[i : i + 32]))
     return np.array(results)
