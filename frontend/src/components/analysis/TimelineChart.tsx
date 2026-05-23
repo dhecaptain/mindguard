@@ -2,14 +2,24 @@ import Plotly from 'plotly.js-dist-min'
 import _createPlotlyComponent from 'react-plotly.js/factory'
 import type { PostData } from '../../types'
 
-// Vite/ESM compatibility fix: handle both default and named exports
-const createPlotlyComponent = (
-  typeof _createPlotlyComponent === 'function' 
-    ? _createPlotlyComponent 
-    : ( _createPlotlyComponent as any).default
-)
+// High-resilience factory resolver
+function getPlotlyComponent() {
+  try {
+    if (typeof _createPlotlyComponent === 'function') {
+      return _createPlotlyComponent(Plotly)
+    }
+    if ((_createPlotlyComponent as any)?.default && typeof (_createPlotlyComponent as any).default === 'function') {
+      return (_createPlotlyComponent as any).default(Plotly)
+    }
+    console.error('Plotly factory not found in expected formats', _createPlotlyComponent)
+    return null
+  } catch (e) {
+    console.error('Failed to initialize Plotly component', e)
+    return null
+  }
+}
 
-const Plot = createPlotlyComponent ? createPlotlyComponent(Plotly) : null
+const Plot = getPlotlyComponent()
 
 interface TimelineChartProps {
   posts: PostData[]

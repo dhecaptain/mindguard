@@ -4,6 +4,9 @@ import tailwindcss from '@tailwindcss/vite'
 
 export default defineConfig({
   plugins: [react(), tailwindcss()],
+  optimizeDeps: {
+    include: ['react-plotly.js/factory', 'plotly.js-dist-min'],
+  },
   server: {
     host: true,
     allowedHosts: ['.ngrok-free.dev', '.ngrok.io', 'localhost'],
